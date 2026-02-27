@@ -193,11 +193,13 @@ func TestBreaking_DeprecationWithProperSunset(t *testing.T) {
 	c := singleCheckConfig(checker.APIDeprecationCheck).WithDeprecation(0, 10)
 	require.NoError(t, err)
 	errs := checker.CheckBackwardCompatibilityUntilLevel(c, d, osm, checker.INFO)
-	require.Len(t, errs, 1)
-	// only a non-breaking change detected
+	require.Len(t, errs, 2)
+	// both endpoint-deprecated and endpoint-deprecated-with-sunset are reported
 	require.Equal(t, checker.EndpointDeprecatedId, errs[0].GetId())
 	require.Equal(t, checker.INFO, errs[0].GetLevel())
 	require.Contains(t, errs[0].GetUncolorizedText(checker.NewDefaultLocalizer()), "endpoint deprecated")
+	require.Equal(t, checker.EndpointDeprecatedWithSunsetId, errs[1].GetId())
+	require.Equal(t, checker.INFO, errs[1].GetLevel())
 }
 
 // CL: path operations that became deprecated
@@ -213,7 +215,7 @@ func TestApiDeprecated_DetectsDeprecatedOperations(t *testing.T) {
 
 	errs := checker.CheckBackwardCompatibilityUntilLevel(singleCheckConfig(checker.APIDeprecationCheck), d, osm, checker.INFO)
 	require.NotEmpty(t, errs)
-	require.Len(t, errs, 1)
+	require.Len(t, errs, 2)
 
 	require.IsType(t, checker.ApiChange{}, errs[0])
 	e0 := errs[0].(checker.ApiChange)
@@ -221,6 +223,10 @@ func TestApiDeprecated_DetectsDeprecatedOperations(t *testing.T) {
 	require.Equal(t, "GET", e0.Operation)
 	require.Equal(t, "/api/test", e0.Path)
 	require.Contains(t, e0.GetUncolorizedText(checker.NewDefaultLocalizer()), "endpoint deprecated")
+
+	require.IsType(t, checker.ApiChange{}, errs[1])
+	e1 := errs[1].(checker.ApiChange)
+	require.Equal(t, checker.EndpointDeprecatedWithSunsetId, e1.Id)
 }
 
 // CL: path operations that were re-activated
@@ -281,10 +287,11 @@ func TestApiDeprecated_MessageIncludesSunset(t *testing.T) {
 
 	errs := checker.CheckBackwardCompatibilityUntilLevel(singleCheckConfig(checker.APIDeprecationCheck), d, osm, checker.INFO)
 	require.NotEmpty(t, errs)
-	require.Len(t, errs, 1)
+	require.Len(t, errs, 2)
 
 	require.Equal(t, checker.EndpointDeprecatedId, errs[0].GetId())
 	require.Equal(t, "endpoint deprecated (sunset: 9999-08-10)", errs[0].GetUncolorizedText(checker.NewDefaultLocalizer()))
+	require.Equal(t, checker.EndpointDeprecatedWithSunsetId, errs[1].GetId())
 }
 
 // CL: message includes both sunset and stability when endpoint deprecated with both
@@ -300,10 +307,11 @@ func TestApiDeprecated_MessageIncludesSunsetAndStability(t *testing.T) {
 
 	errs := checker.CheckBackwardCompatibilityUntilLevel(singleCheckConfig(checker.APIDeprecationCheck), d, osm, checker.INFO)
 	require.NotEmpty(t, errs)
-	require.Len(t, errs, 1)
+	require.Len(t, errs, 2)
 
 	require.Equal(t, checker.EndpointDeprecatedId, errs[0].GetId())
 	require.Equal(t, "endpoint deprecated (sunset: 9999-08-10, stability: beta)", errs[0].GetUncolorizedText(checker.NewDefaultLocalizer()))
+	require.Equal(t, checker.EndpointDeprecatedWithSunsetId, errs[1].GetId())
 }
 
 // CL: message has no details when endpoint deprecated without sunset or stability
@@ -361,10 +369,12 @@ func TestBreaking_DeprecationWithRFC3339Sunset(t *testing.T) {
 	require.NoError(t, err)
 	c := singleCheckConfig(checker.APIDeprecationCheck).WithDeprecation(0, 10)
 	errs := checker.CheckBackwardCompatibilityUntilLevel(c, d, osm, checker.INFO)
-	require.Len(t, errs, 1)
-	// only a non-breaking change detected
+	require.Len(t, errs, 2)
+	// both endpoint-deprecated and endpoint-deprecated-with-sunset are reported
 	require.Equal(t, checker.EndpointDeprecatedId, errs[0].GetId())
 	require.Equal(t, checker.INFO, errs[0].GetLevel())
+	require.Equal(t, checker.EndpointDeprecatedWithSunsetId, errs[1].GetId())
+	require.Equal(t, checker.INFO, errs[1].GetLevel())
 }
 
 // BC: deprecating an operation with invalid JSON sunset date is breaking
@@ -385,4 +395,34 @@ func TestBreaking_DeprecationWithInvalidJsonSunset(t *testing.T) {
 	require.Len(t, errs, 1)
 	require.Equal(t, checker.APIDeprecatedSunsetParseId, errs[0].GetId())
 	require.Contains(t, errs[0].GetUncolorizedText(checker.NewDefaultLocalizer()), "failed to unmarshal sunset json")
+}
+
+// CL: endpoint deprecation message includes sunset date
+func TestEndpointDeprecation_MessageWithSunsetDate(t *testing.T) {
+	s1, err := open(getDeprecationFile("base.yaml"))
+	require.NoError(t, err)
+
+	s2, err := open(getDeprecationFile("deprecated-future.yaml"))
+	require.NoError(t, err)
+
+	// Use RFC3339 format (with time) instead of just date
+	sunsetDate := civil.DateOf(time.Now()).AddDays(30)
+	sunsetRFC3339 := time.Date(sunsetDate.Year, sunsetDate.Month, sunsetDate.Day, 12, 0, 0, 0, time.UTC).Format(time.RFC3339)
+	s2.Spec.Paths.Value("/api/test").Get.Extensions[diff.SunsetExtension] = toJson(t, sunsetRFC3339)
+
+	d, osm, err := diff.GetWithOperationsSourcesMap(diff.NewConfig(), s1, s2)
+	require.NoError(t, err)
+	c := singleCheckConfig(checker.APIDeprecationCheck).WithDeprecation(0, 10)
+	errs := checker.CheckBackwardCompatibilityUntilLevel(c, d, osm, checker.INFO)
+
+	// Find the endpoint-deprecated-with-sunset change
+	var sunsetChange checker.Change
+	for _, err := range errs {
+		if err.GetId() == checker.EndpointDeprecatedWithSunsetId {
+			sunsetChange = err
+			break
+		}
+	}
+	require.NotNil(t, sunsetChange, "expected to find endpoint-deprecated-with-sunset change")
+	require.Equal(t, fmt.Sprintf("endpoint deprecated with sunset date '%s'", sunsetDate.String()), sunsetChange.GetUncolorizedText(checker.NewDefaultLocalizer()))
 }

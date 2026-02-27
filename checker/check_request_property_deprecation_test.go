@@ -228,3 +228,24 @@ func TestRequestPropertyDeprecation_MessageWithoutDetails(t *testing.T) {
 	require.Equal(t, checker.RequestPropertyDeprecatedId, errs[0].GetId())
 	require.Equal(t, "request property 'oldField' deprecated", errs[0].GetUncolorizedText(checker.NewDefaultLocalizer()))
 }
+
+// CL: message includes sunset date when request property deprecated with valid sunset
+func TestRequestPropertyDeprecation_MessageWithSunsetDate(t *testing.T) {
+	s1, err := open(getPropertyDeprecationFile("property_base_stable.yaml"))
+	require.NoError(t, err)
+
+	s2, err := open(getPropertyDeprecationFile("property_deprecated_future.yaml"))
+	require.NoError(t, err)
+
+	sunsetDate := civil.DateOf(time.Now()).AddDays(30).String()
+	s2.Spec.Components.Schemas["TestRequest"].Value.Properties["oldField"].Value.Extensions[diff.SunsetExtension] = toJson(t, sunsetDate)
+
+	d, osm, err := diff.GetWithOperationsSourcesMap(diff.NewConfig(), s1, s2)
+	require.NoError(t, err)
+
+	c := singleCheckConfig(checker.RequestPropertyDeprecationCheck).WithDeprecation(0, 10)
+	errs := checker.CheckBackwardCompatibilityUntilLevel(c, d, osm, checker.INFO)
+	require.Len(t, errs, 1)
+	require.Equal(t, checker.RequestPropertyDeprecatedId, errs[0].GetId())
+	require.Equal(t, fmt.Sprintf("request property 'oldField' deprecated (sunset: %s, stability: stable)", sunsetDate), errs[0].GetUncolorizedText(checker.NewDefaultLocalizer()))
+}
