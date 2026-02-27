@@ -11,6 +11,11 @@ import (
 
 func TestStringCond_Info(t *testing.T) {
 	level := checker.INFO
+	// Simulate piped output for ColorAuto test to ensure deterministic behavior
+	piped := true
+	saved := checker.SetPipedOutput(&piped)
+	defer checker.SetPipedOutput(saved)
+
 	require.Equal(t, level.PrettyString(), level.StringCond(checker.ColorAlways))
 	require.Equal(t, level.String(), level.StringCond(checker.ColorNever))
 	require.Equal(t, level.String(), level.StringCond(checker.ColorAuto))
